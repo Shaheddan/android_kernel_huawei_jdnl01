@@ -16,7 +16,7 @@
 
 include $(srctree)/arch/arm64/boot/dts/qcom/Makefile
 
-targets := Image Image.gz
+targets := Image Image.gz dt.img
 
 DTB_NAMES := $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES))
 ifneq ($(DTB_NAMES),)
@@ -38,6 +38,9 @@ $(obj)/Image.gz: $(obj)/Image FORCE
 $(obj)/Image.gz-dtb: $(obj)/Image.gz $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
+$(obj)/dt.img: $(DTB_OBJS) FORCE
+	$(call if_changed,dtbtool)
+	
 install: $(obj)/Image
 	$(CONFIG_SHELL) $(srctree)/$(src)/install.sh $(KERNELRELEASE) \
 	$(obj)/Image System.map "$(INSTALL_PATH)"

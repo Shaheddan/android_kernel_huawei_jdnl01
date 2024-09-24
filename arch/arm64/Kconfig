@@ -592,6 +592,15 @@ config CMDLINE_FORCE
 	  command-line options your boot loader passes to the kernel.
 endchoice
 
+config DT_IMAGE
+    bool "Build the dt.img using dtbtool"
+    help
+      Enable this option to build the device tree image (dt.img) using 
+      the dtbtool. The dtbtool collects all the compiled Device Tree 
+      Blobs (DTBs) and packages them into a single dt.img file.
+      If you are working with devices that require a bundled dt.img, 
+      enable this option. Otherwise, leave it disabled.
+
 config BUILD_ARM64_APPENDED_DTB_IMAGE
 	bool "Build a concatenated Image.gz/dtb by default"
 	depends on OF

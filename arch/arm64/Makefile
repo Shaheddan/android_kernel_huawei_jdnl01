@@ -57,6 +57,9 @@ KBUILD_IMAGE	:= Image.gz
 endif
 
 KBUILD_DTBS	:= dtbs
+ifeq ($(CONFIG_DT_IMAGE),y)
+KBUILD_DTBS += dt.img
+endif
 
 all:	$(KBUILD_IMAGE) $(KBUILD_DTBS)
 
@@ -75,6 +78,9 @@ dtbs: scripts
 	$(Q)$(MAKE) $(build)=$(boot)/dts dtbs
 	$(Q)$(MAKE) $(build)=$(boot)/dts/qcom dtbs
 
+dt.img: scripts dtbs
+	$(Q)$(MAKE) $(build)=$(boot) $(boot)/$@
+
 PHONY += vdso_install
 vdso_install:
 	$(Q)$(MAKE) $(build)=arch/arm64/kernel/vdso $@
@@ -89,6 +95,7 @@ archclean:
 define archhelp
   echo  '* Image.gz      - Compressed kernel image (arch/$(ARCH)/boot/Image.gz)'
   echo  '  Image         - Uncompressed kernel image (arch/$(ARCH)/boot/Image)'
+  echo  '  dt.img        - Build device tree image (arch/$(ARCH)/boot/dt.img)'
   echo  '* dtbs          - Build device tree blobs for enabled boards'
   echo  '  install       - Install uncompressed kernel'
   echo  '  zinstall      - Install compressed kernel'
