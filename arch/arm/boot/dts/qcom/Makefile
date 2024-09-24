@@ -318,9 +318,12 @@ targets += dtbs
 targets += $(addprefix ../, $(DTB_LIST))
 endif
 
-$(obj)/../%.dtb: $(src)/%.dts FORCE
+PARENT_DIR := $(patsubst %/,%,$(dir $(obj)))
+
+$(PARENT_DIR)/%.dtb: $(src)/%.dts FORCE
 	$(call if_changed_dep,dtc)
 
-dtbs: $(addprefix $(obj)/../,$(DTB_LIST))
+dtbs: $(addprefix $(PARENT_DIR)/,$(DTB_LIST))
 
 clean-files := *.dtb
+targets += $(addprefix $(PARENT_DIR)/,$(DTB_LIST))
