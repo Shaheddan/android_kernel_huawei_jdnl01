@@ -283,6 +283,7 @@ page_size = 4096
 endif
 quiet_cmd_dtbtool = DTBTOOL $@
 cmd_dtbtool = $(objtree)/scripts/dtbtool/dtbtool \
+		--dtc-path $(objtree)/scripts/dtc/ \
 		--page-size $(page_size) \
 		--output-file $@ $(objtree)/arch/arm64/boot/dts/
 
