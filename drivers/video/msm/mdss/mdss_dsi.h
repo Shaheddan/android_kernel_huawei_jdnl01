@@ -341,6 +341,13 @@ struct mdss_dsi_ctrl_pdata {
 	int rst_gpio;
 	int disp_en_gpio;
 	int bklt_en_gpio;
+	/* Huawei jdn names its backlight enables differently from CAF, so the
+	 * stock parsing never finds them. Separate fields rather than reusing
+	 * disp_en_gpio/bklt_en_gpio, which mdss_dsi_panel_reset() gpio_free()s
+	 * on panel disable -- exactly when we still need to own these. */
+	int hw_vcc_gpio;
+	int hw_bl_gpio;
+	int hw_vled_gpio;
 	int mode_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;

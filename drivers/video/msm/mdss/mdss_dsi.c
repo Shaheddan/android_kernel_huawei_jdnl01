@@ -1880,6 +1880,37 @@ int dsi_panel_device_register(struct device_node *pan_node,
 
 	ctrl_pdata->bklt_en_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
 		"qcom,platform-bklight-en-gpio", 0);
+
+	/*
+	 * jdn's backlight sits on three GPIOs that no CAF property name covers.
+	 * All three must be high for the panel to be lit -- verified live over
+	 * adb, where dropping any one of them darkens the screen. Huawei names
+	 * them after the schematic net, not the pin: vcc-gpio2 is pin 2,
+	 * bl-gpio109 is pin 3, vled-gpio97 is pin 109.
+	 *
+	 * Requested HIGH so the display behaves from boot exactly as it does
+	 * today; only the bl pin is toggled afterwards, by bl_ctrl.
+	 */
+	ctrl_pdata->hw_vcc_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
+		"qcom,platform-vcc-gpio2", 0);
+	ctrl_pdata->hw_bl_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
+		"qcom,platform-bl-gpio109", 0);
+	ctrl_pdata->hw_vled_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
+		"qcom,platform-vled-gpio97", 0);
+
+	if (gpio_is_valid(ctrl_pdata->hw_vcc_gpio))
+		gpio_request_one(ctrl_pdata->hw_vcc_gpio,
+			GPIOF_OUT_INIT_HIGH, "hw_vcc");
+	if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
+		gpio_request_one(ctrl_pdata->hw_bl_gpio,
+			GPIOF_OUT_INIT_HIGH, "hw_bl");
+	if (gpio_is_valid(ctrl_pdata->hw_vled_gpio))
+		gpio_request_one(ctrl_pdata->hw_vled_gpio,
+			GPIOF_OUT_INIT_HIGH, "hw_vled");
+
+	pr_info("%s: jdn backlight gpios vcc=%d bl=%d vled=%d\n", __func__,
+		ctrl_pdata->hw_vcc_gpio, ctrl_pdata->hw_bl_gpio,
+		ctrl_pdata->hw_vled_gpio);
 	if (!gpio_is_valid(ctrl_pdata->bklt_en_gpio))
 		pr_info("%s: bklt_en gpio not specified\n", __func__);
 

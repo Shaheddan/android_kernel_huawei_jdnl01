@@ -560,6 +560,16 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
 		bl_level = pdata->panel_info.bl_min;
 
+	/*
+	 * The panel is declared bl_ctrl_dcs, so the brightness below goes out as
+	 * DSI commands and never reaches the physical backlight. Gate the
+	 * hardware enable here so level 0 genuinely turns the light off, which is
+	 * what lets the power button blank the screen. Only the bl pin is
+	 * touched; see the request site in mdss_dsi.c for why.
+	 */
+	if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
+		gpio_set_value(ctrl_pdata->hw_bl_gpio, bl_level ? 1 : 0);
+
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
 		led_trigger_event(bl_led_trigger, bl_level);
