@@ -79,7 +79,8 @@ dtb-$(CONFIG_ARCH_MSM8909) += msm8909-sim.dtb \
 	apq8009-mtp-wcd9326-refboard.dtb \
 	apq8009-512mb-mtp-wcd9326-refboard.dtb
 ifeq ($(CONFIG_HUAWEI_KERNEL),y)
-dtb-$(CONFIG_ARCH_MSM8916) += huawei_kiw_al10_vc3.0.dtb \
+dtb-$(CONFIG_ARCH_MSM8916) += huawei_jdn_l01.dtb \
+	huawei_kiw_al10_vc3.0.dtb \
 	huawei_kiw_al10_vc.dtb \
 	huawei_kiw_al10_vd3.0.dtb \
 	huawei_kiw_al10_vd.dtb \
