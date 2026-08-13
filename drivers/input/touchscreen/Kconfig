@@ -924,6 +924,15 @@ config TOUCHSCREEN_TPS6507X
 	  To compile this driver as a module, choose M here: the
 	  module will be called tps6507x_ts.
 
+config TOUCHSCREEN_NVT_JDN
+	tristate "Novatek touchscreen (Huawei JDN, minimal)"
+	depends on I2C
+	help
+	  Minimal driver for the Novatek digitiser in the Huawei MediaPad
+	  T2 8.0 Pro. The chip runs its own firmware and reports in the
+	  standard Novatek point format, so this only powers it, resets it,
+	  and decodes points. No firmware update or chip-ID trim.
+
 config TOUCHSCREEN_FT5X06
        tristate "FocalTech touchscreens"
        depends on I2C
