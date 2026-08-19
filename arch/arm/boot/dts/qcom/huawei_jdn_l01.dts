@@ -5567,6 +5567,7 @@
 
 		qcom,mss@4080000 {
 			compatible = "qcom,pil-q6v56-mss";
+			status = "disabled";
 			reg = <0x4080000 0x100 0x194f000 0x10 0x1950000 0x8 0x1951000 0x8 0x4020000 0x40 0x1810000 0x4>;
 			reg-names = "qdsp6_base", "halt_q6", "halt_modem", "halt_nc", "rmb_base", "restart_reg_sec";
 			interrupts = <0x0 0x18 0x1>;
