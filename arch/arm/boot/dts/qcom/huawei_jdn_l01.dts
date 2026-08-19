@@ -3662,7 +3662,7 @@
 			reg-names = "wcnss_mmio", "wcnss_fiq", "pronto_phy_base", "riva_phy_base", "riva_ccu_base", "pronto_a2xb_base", "pronto_ccpu_base", "pronto_saw2_base", "wlan_tx_phy_aborts", "wlan_brdg_err_source", "wlan_tx_status", "alarms_txctl", "alarms_tactl", "pronto_mcu_base";
 			interrupts = <0x0 0x91 0x0 0x0 0x92 0x0>;
 			interrupt-names = "wcnss_wlantx_irq", "wcnss_wlanrx_irq";
-			qcom,pronto-vddmx-supply = <0x91>;
+			qcom,pronto-vddmx-supply = <0x101>;
 			qcom,pronto-vddcx-supply = <0x69>;
 			qcom,pronto-vddpx-supply = <0x92>;
 			qcom,iris-vddxo-supply = <0x92>;
