@@ -3860,33 +3860,18 @@ static int msm8x16_asoc_machine_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-	/*
-	 * Query the ADSP version BEFORE registering the card.
-	 *
-	 * This used to run after snd_soc_register_card(). When the ADSP is
-	 * absent the query fails, the probe returns -EPROBE_DEFER and jumps
-	 * to err WITHOUT unregistering -- leaking the registered card. The
-	 * deferred re-probe then re-registers it, colliding on the runtime
-	 * device name ('MSM8X16 Media1', -EEXIST) and leaving the card half
-	 * registered: live mixer controls over codec data that was never
-	 * fully initialised. Walking those controls dereferences a mutex
-	 * that was never mutex_init'd and panics the kernel.
-	 *
-	 * core_get_adsp_ver() has no dependency on the card, so checking it
-	 * first makes a missing ADSP defer cleanly with nothing registered.
-	 */
+	ret = snd_soc_register_card(card);
+	if (ret) {
+		dev_err(&pdev->dev, "snd_soc_register_card failed (%d)\n",
+			ret);
+		goto err;
+	}
+
 	ret = core_get_adsp_ver();
 	if (ret < 0) {
 		ret = -EPROBE_DEFER;
 		dev_info(&pdev->dev, "%s: Get adsp version failed (%d)\n",
 				__func__, ret);
-		goto err;
-	}
-
-	ret = snd_soc_register_card(card);
-	if (ret) {
-		dev_err(&pdev->dev, "snd_soc_register_card failed (%d)\n",
-			ret);
 		goto err;
 	}
 
