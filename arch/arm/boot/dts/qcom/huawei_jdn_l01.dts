@@ -4251,7 +4251,7 @@
 			};
 
 			di@1e {
-				compatible = "di_ap34xx";
+				compatible = "di_ap34xx", "di,ap3426";
 				reg = <0x1e>;
 				vdd-supply = <0x6f>;
 				vio-supply = <0x70>;
@@ -4263,6 +4263,16 @@
 				ap3426,irq-gpio = <0x75 0x71 0x2002>;
 				ap3426,ps_high = <0x78>;
 				ap3426,ps_low = <0x2d>;
+				di,irq-gpio = <0x75 0x71 0x2002>;
+				di,als-cal = <320>;
+				di,als-gain = <1>;
+				di,als-persist = <0x1>;
+				di,ps-gain = <1>;
+				di,ps-persist = <0x2>;
+				di,ps-led-driver = <3>;
+				di,ps-mean-time = <0x2>;
+				di,ps-integrated-time = <0xc>;
+				di,wakeup-threshold = <4>;
 			};
 
 			lm36923_backlight@36 {
@@ -5378,7 +5388,7 @@
 
 		qcom,rmtfs_sharedmem@8e580000 {
 			compatible = "qcom,sharedmem-uio";
-			reg = <0x86680000 0x160000>;
+			reg = <0x86700000 0x160000>;
 			reg-names = "rmtfs";
 			qcom,client-id = <0x1>;
 		};
@@ -5567,7 +5577,7 @@
 
 		qcom,mss@4080000 {
 			compatible = "qcom,pil-q6v56-mss";
-			status = "disabled";
+			status = "ok";
 			reg = <0x4080000 0x100 0x194f000 0x10 0x1950000 0x8 0x1951000 0x8 0x4020000 0x40 0x1810000 0x4>;
 			reg-names = "qdsp6_base", "halt_q6", "halt_modem", "halt_nc", "rmb_base", "restart_reg_sec";
 			interrupts = <0x0 0x18 0x1>;
