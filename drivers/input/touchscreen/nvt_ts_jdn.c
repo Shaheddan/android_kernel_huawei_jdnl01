@@ -53,6 +53,8 @@
 #include <linux/of_gpio.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
+#include <linux/fb.h>
+#include <linux/notifier.h>
 
 #define NVT_NAME		"nvt_ts_jdn"
 
@@ -65,13 +67,23 @@ static int max_x = 1200;
 static int max_y = 1920;
 static int poll_ms = 15;	/* ~66 Hz */
 static bool use_irq;
+/*
+ * How long to wait after FB_BLANK_UNBLANK before trusting the controller
+ * again. The phantom tap measured on this hardware arrived 249 ms after the
+ * power key was released; 300 ms covers that with a little margin. Tunable at
+ * runtime because it is a starting point, not a measured settling time.
+ */
+static int resume_settle_ms = 300;
 
 module_param(max_x, int, 0644);
 module_param(max_y, int, 0644);
 module_param(poll_ms, int, 0644);
 module_param(use_irq, bool, 0644);
+module_param(resume_settle_ms, int, 0644);
 MODULE_PARM_DESC(poll_ms, "poll interval in ms (ignored when use_irq=1)");
 MODULE_PARM_DESC(use_irq, "use the DTS interrupt instead of polling");
+MODULE_PARM_DESC(resume_settle_ms,
+	"ms to ignore the controller after the panel unblanks");
 
 struct nvt_ts {
 	struct i2c_client *client;
@@ -82,6 +94,8 @@ struct nvt_ts {
 	int rst_gpio;
 	int irq_gpio;
 	unsigned long slots_down;	/* bitmask of slots currently reported */
+	struct notifier_block fb_notif;
+	bool display_off;		/* set between BLANK and UNBLANK+settle */
 	u8 buf[NVT_READ_LEN];
 };
 
@@ -166,12 +180,65 @@ static void nvt_report(struct nvt_ts *ts)
 	input_sync(ts->input);
 }
 
+static void nvt_release_all(struct nvt_ts *ts)
+{
+	int slot;
+
+	/* Drop anything still held, or the next resume inherits stale fingers. */
+	for (slot = 0; slot < NVT_MAX_FINGERS; slot++) {
+		if (!test_bit(slot, &ts->slots_down))
+			continue;
+		input_mt_slot(ts->input, slot);
+		input_mt_report_slot_state(ts->input, MT_TOOL_FINGER, false);
+	}
+	ts->slots_down = 0;
+	input_mt_report_pointer_emulation(ts->input, false);
+	input_sync(ts->input);
+}
+
+static int nvt_fb_notifier_cb(struct notifier_block *nb,
+			      unsigned long event, void *data)
+{
+	struct nvt_ts *ts = container_of(nb, struct nvt_ts, fb_notif);
+	struct fb_event *evdata = data;
+	int blank;
+
+	if (event != FB_EVENT_BLANK || !evdata || !evdata->data)
+		return 0;
+
+	blank = *(int *)evdata->data;
+
+	if (blank == FB_BLANK_POWERDOWN) {
+		ts->display_off = true;
+		nvt_release_all(ts);
+		dev_dbg(&ts->client->dev, "display off, touch gated\n");
+	} else if (blank == FB_BLANK_UNBLANK) {
+		/*
+		 * Stay gated a little past unblank: the phantom report happens
+		 * around the panel power transition, not only on the way down.
+		 */
+		msleep(resume_settle_ms);
+		ts->display_off = false;
+		dev_dbg(&ts->client->dev, "display on, touch live\n");
+	}
+
+	return 0;
+}
+
 static void nvt_poll_work(struct work_struct *work)
 {
 	struct nvt_ts *ts = container_of(to_delayed_work(work),
 					 struct nvt_ts, poll_work);
 
-	nvt_report(ts);
+	/*
+	 * The controller emits a spurious complete tap while the panel powers
+	 * down -- measured at ~250 ms after the power key, with a valid
+	 * tracking ID. Anything reading input takes it as a wake. Do not read
+	 * the chip at all while the display is down.
+	 */
+	if (!ts->display_off)
+		nvt_report(ts);
+
 	schedule_delayed_work(&ts->poll_work, msecs_to_jiffies(poll_ms));
 }
 
@@ -313,6 +380,11 @@ static int nvt_ts_probe(struct i2c_client *client,
 		dev_info(&client->dev, "polling every %d ms\n", poll_ms);
 	}
 
+	ts->fb_notif.notifier_call = nvt_fb_notifier_cb;
+	if (fb_register_client(&ts->fb_notif))
+		dev_warn(&client->dev,
+			 "fb_register_client failed; touch will not be gated on display state\n");
+
 	dev_info(&client->dev, "ready, %dx%d\n", max_x, max_y);
 	return 0;
 }
@@ -320,6 +392,8 @@ static int nvt_ts_probe(struct i2c_client *client,
 static int nvt_ts_remove(struct i2c_client *client)
 {
 	struct nvt_ts *ts = i2c_get_clientdata(client);
+
+	fb_unregister_client(&ts->fb_notif);
 
 	if (!use_irq)
 		cancel_delayed_work_sync(&ts->poll_work);
