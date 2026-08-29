@@ -2457,6 +2457,22 @@ source "drivers/video/omap/Kconfig"
 source "drivers/video/omap2/Kconfig"
 source "drivers/video/exynos/Kconfig"
 source "drivers/video/mmp/Kconfig"
+config LM36923_BL
+	bool "TI LM36923 i2c backlight (Huawei MediaPad T2 8.0 Pro)"
+	depends on I2C
+	default n
+	help
+	  Backlight driver for the TI LM36923 fitted at i2c-0 address 0x36 on the
+	  Huawei MediaPad T2 8.0 Pro (hwjdn). The panel is declared bl_ctrl_dcs but
+	  ignores DCS 0x51; this chip is what actually dims it. Without this driver
+	  the backlight is on/off only.
+
+	  Deliberately not a backlight class device -- mdss reaches it through
+	  panel_data.set_backlight, so BACKLIGHT_LCD_SUPPORT is not required.
+
+	  Say N on any other board.
+
+
 source "drivers/video/backlight/Kconfig"
 source "drivers/video/adf/Kconfig"
 

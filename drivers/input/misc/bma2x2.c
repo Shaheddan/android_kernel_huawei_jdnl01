@@ -61,7 +61,22 @@
 #define ISR_INFO(dev, fmt, arg...)
 #endif
 
-#define BMA2X2_SENSOR_IDENTIFICATION_ENABLE
+/*
+ * hwjdn: deliberately NOT defined.
+ *
+ * The only thing this macro does in this file is compile out the
+ * `>> (16 - bitwidth)` normalisation in bma2x2_read_accel_xyz() and in the FIFO
+ * sysfs dump.  The BMA255 fitted here is a 12-bit part, so without that shift
+ * the driver reports raw 16-bit register pairs: 16x too large (1 g = 16384
+ * counts instead of 1024) with the LSB register's reserved bits left in the low
+ * nibble.  This same driver advertises resolution 0.00957031 (= 9.81/1024) to
+ * the sensors HAL, so userspace scaled every sample by 16 and auto-rotation
+ * rejected the ~157 m/s^2 vector as external acceleration.
+ *
+ * Range is fixed at +/-2 g, so sensitivity is 0 and the reporter's
+ * `<< sensitivity` is a no-op -- restoring the shift cannot double-compensate.
+ */
+/* #define BMA2X2_SENSOR_IDENTIFICATION_ENABLE */
 
 #define SENSOR_NAME                 "bma2x2-accel"
 #define ABSMIN                      -512

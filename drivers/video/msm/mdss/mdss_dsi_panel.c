@@ -21,6 +21,7 @@
 #include <linux/leds.h>
 #include <linux/qpnp/pwm.h>
 #include <linux/err.h>
+#include <linux/lm36923_bl.h>
 
 #include "mdss_dsi.h"
 #include "mdss_livedisplay.h"
@@ -537,6 +538,126 @@ static void mdss_dsi_panel_switch_mode(struct mdss_panel_data *pdata,
 	return;
 }
 
+
+/* ---- hwjdn: DSI command injection for backlight bring-up (DEBUG) ----------
+ *
+ * The panel is bl_ctrl_dcs, so mdss already sends DCS 0x51 with the level on
+ * every brightness change and the NT51021 does not dim in response -- only the
+ * GPIO enable below has any effect, which is why the slider has two levels.
+ *
+ * Finding the sequence this panel really wants would otherwise cost a full
+ * kernel build and a flash per guess, so expose the write path once:
+ *
+ *     echo 51 80    > /sys/kernel/jdn_dsi/cmd
+ *     echo 53 24    > /sys/kernel/jdn_dsi/cmd
+ *     echo hs 83 bb > /sys/kernel/jdn_dsi/cmd
+ *
+ * THE SCREEN MUST BE ON. CMD_CLK_CTRL brings the DSI clocks up around the
+ * transfer, but a powered-down panel cannot answer.
+ *
+ * REMOVE THIS BLOCK BEFORE THE ROM IS PUBLISHED -- it is a root-writable
+ * arbitrary-DSI-command hole, which is fine on a bring-up build and not fine
+ * on anyone else's tablet.
+ */
+#include <linux/init.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
+
+static struct mdss_dsi_ctrl_pdata *jdn_dbg_ctrl;
+static char jdn_dbg_payload[2];
+static struct dsi_cmd_desc jdn_dbg_cmd = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(jdn_dbg_payload)},
+	jdn_dbg_payload
+};
+
+static ssize_t jdn_dsi_cmd_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	struct dcs_cmd_req cmdreq;
+	const char *p = buf;
+	char *end;
+	u32 flags = CMD_REQ_COMMIT | CMD_CLK_CTRL;
+	unsigned long v;
+	int n = 0;
+
+	if (!jdn_dbg_ctrl) {
+		pr_err("jdn_dsi: no ctrl captured yet, change the brightness once first\n");
+		return -ENODEV;
+	}
+
+	while (*p == ' ' || *p == '\t')
+		p++;
+	if (!strncmp(p, "hs", 2)) {
+		flags |= CMD_REQ_HS_MODE;
+		p += 2;
+	} else if (!strncmp(p, "lp", 2)) {
+		flags |= CMD_REQ_LP_MODE;
+		p += 2;
+	}
+
+	/* Cast because ARRAY_SIZE is size_t and the gcc-wrapper in this tree
+	 * promotes some warnings to hard errors. */
+	while (n < (int)ARRAY_SIZE(jdn_dbg_payload)) {
+		while (*p == ' ' || *p == '\t' || *p == '\n')
+			p++;
+		if (!*p)
+			break;
+		v = simple_strtoul(p, &end, 16);
+		if (end == p)
+			break;
+		jdn_dbg_payload[n++] = (char)v;
+		p = end;
+	}
+
+	if (n < 1) {
+		pr_err("jdn_dsi: nothing parsed, expected hex bytes\n");
+		return -EINVAL;
+	}
+
+	/* 1 byte is a parameterless DCS write, 2 is a one-parameter write.
+	 * Long writes are intentionally not offered -- see the patch header. */
+	jdn_dbg_cmd.dchdr.dtype = (n == 1) ? DTYPE_DCS_WRITE : DTYPE_DCS_WRITE1;
+	jdn_dbg_cmd.dchdr.last = 1;
+	jdn_dbg_cmd.dchdr.vc = 0;
+	jdn_dbg_cmd.dchdr.ack = 0;
+	jdn_dbg_cmd.dchdr.wait = 1;
+	jdn_dbg_cmd.dchdr.dlen = n;
+	jdn_dbg_cmd.payload = jdn_dbg_payload;
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmdreq.cmds = &jdn_dbg_cmd;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = flags;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	pr_info("jdn_dsi: send %d byte(s) %02x %02x flags %08x\n", n,
+		jdn_dbg_payload[0] & 0xff,
+		(n > 1) ? (jdn_dbg_payload[1] & 0xff) : 0, flags);
+
+	mdss_dsi_cmdlist_put(jdn_dbg_ctrl, &cmdreq);
+	return count;
+}
+
+static struct kobj_attribute jdn_dsi_cmd_attr =
+	__ATTR(cmd, 0200, NULL, jdn_dsi_cmd_store);
+
+static int __init jdn_dsi_dbg_init(void)
+{
+	struct kobject *k = kobject_create_and_add("jdn_dsi", kernel_kobj);
+
+	if (!k)
+		return -ENOMEM;
+	if (sysfs_create_file(k, &jdn_dsi_cmd_attr.attr))
+		pr_err("jdn_dsi: sysfs_create_file failed\n");
+	else
+		pr_info("jdn_dsi: /sys/kernel/jdn_dsi/cmd ready\n");
+	return 0;
+}
+late_initcall(jdn_dsi_dbg_init);
+/* ---- end hwjdn DSI command injection ------------------------------------ */
+
+
 static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 							u32 bl_level)
 {
@@ -561,14 +682,23 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		bl_level = pdata->panel_info.bl_min;
 
 	/*
-	 * The panel is declared bl_ctrl_dcs, so the brightness below goes out as
-	 * DSI commands and never reaches the physical backlight. Gate the
+	 * The DCS brightness below is inert on this panel -- it ignores 0x51. Real
+	 * dimming is the LM36923 call further down. Gate the
 	 * hardware enable here so level 0 genuinely turns the light off, which is
 	 * what lets the power button blank the screen. Only the bl pin is
 	 * touched; see the request site in mdss_dsi.c for why.
 	 */
+	jdn_dbg_ctrl = ctrl_pdata;	/* for /sys/kernel/jdn_dsi/cmd */
 	if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
 		gpio_set_value(ctrl_pdata->hw_bl_gpio, bl_level ? 1 : 0);
+
+	/*
+	 * Real proportional dimming. The LM36923 at i2c-0 0x36 is this board's
+	 * actual backlight controller; the DCS path below is a no-op on this
+	 * panel. Called AFTER the gpio above so the chip's rail is up before we
+	 * talk to it, and compiles to nothing when the driver is disabled.
+	 */
+	lm36923_set_backlight(bl_level);
 
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
