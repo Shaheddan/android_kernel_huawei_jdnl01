@@ -4415,7 +4415,10 @@
 				reg = <0x6b>;
 				ti,max_charger_currentmA = <0x800>;
 				ti,max_charger_voltagemV = <0x10fe>;
-				ti,max_cin_limit_currentmA = <0x3e8>;
+				/* jdn: 2000 mA wall-charger input, as on every KIW board with this
+				 * BQ24296 (stock JDN shipped 1000; measured DPM-limited at 1 A on
+				 * Huawei's 5 V / 2 A adapter). */
+				ti,max_cin_limit_currentmA = <0x7d0>;
 				ti,no_ibus_detect;
 				gpio_cd = <0x75 0x6c 0x0>;
 				gpio_int = <0x75 0x3e 0x0>;
