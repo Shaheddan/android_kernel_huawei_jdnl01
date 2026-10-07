@@ -92,8 +92,23 @@ static int mdss_dsi_panel_power_off(struct mdss_panel_data *pdata)
 		ret = 0;
 	}
 
-	if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false))
+	/*
+	 * jdn-pad: Huawei skips the sleep pinctrl state here (it would park the
+	 * reset pin) and powers the panel down by GPIO instead
+	 * (hw_panel_power_en(0)): BL, VCC, then 500 ms unpowered so the next
+	 * power-up starts from a cold panel.
+	 */
+	if (ctrl_pdata->hw_product_pad == 1 &&
+	    ctrl_pdata->which_product_pad == 2) {
+		if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
+			gpio_set_value(ctrl_pdata->hw_bl_gpio, 0);
+		if (gpio_is_valid(ctrl_pdata->hw_vcc_gpio))
+			gpio_set_value(ctrl_pdata->hw_vcc_gpio, 0);
+		msleep(500);
+		pr_info("%s: jdn-pad power off (BL, VCC, 500 ms)\n", __func__);
+	} else if (mdss_dsi_pinctrl_set_state(ctrl_pdata, false)) {
 		pr_debug("reset disable: pinctrl not enabled\n");
+	}
 
 	if (ctrl_pdata->panel_bias_vreg) {
 		pr_debug("%s: Disabling panel bias vreg. ndx = %d\n",
@@ -160,6 +175,22 @@ static int mdss_dsi_panel_power_on(struct mdss_panel_data *pdata)
 			pr_err("Unable to configure bias vreg\n");
 		/* Add delay recommended by panel specs */
 		udelay(2000);
+	}
+
+	/*
+	 * jdn-pad: Huawei's panel power-up for jdn (hw_panel_power_en(1) in their
+	 * mdss_dsi.c): VCC, 1 ms, BL, 30 ms. With cont-splash both are already
+	 * high from the bootloader, so the first call changes nothing.
+	 */
+	if (ctrl_pdata->hw_product_pad == 1 &&
+	    ctrl_pdata->which_product_pad == 2) {
+		if (gpio_is_valid(ctrl_pdata->hw_vcc_gpio))
+			gpio_set_value(ctrl_pdata->hw_vcc_gpio, 1);
+		usleep_range(1000, 1500);
+		if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
+			gpio_set_value(ctrl_pdata->hw_bl_gpio, 1);
+		msleep(30);
+		pr_info("%s: jdn-pad power on (VCC, BL)\n", __func__);
 	}
 
 	i--;
@@ -1303,6 +1334,18 @@ static int mdss_dsi_event_handler(struct mdss_panel_data *pdata,
 		pdata->panel_info.esd_rdy = true;
 		break;
 	case MDSS_EVENT_BLANK:
+		/*
+		 * jdn-pad: Huawei drops VLED and waits 100 ms before the sleep-in
+		 * command (hw_panel_bias_en(0) in their MDSS_EVENT_BLANK). bl_ctrl
+		 * raises it again at the first non-zero level.
+		 */
+		if (ctrl_pdata->hw_product_pad == 1 &&
+		    ctrl_pdata->which_product_pad == 2) {
+			if (gpio_is_valid(ctrl_pdata->hw_vled_gpio))
+				gpio_set_value(ctrl_pdata->hw_vled_gpio, 0);
+			ctrl_pdata->hw_led_en = false;
+			msleep(100);
+		}
 		power_state = (int) (unsigned long) arg;
 		if (ctrl_pdata->off_cmds.link_state == DSI_HS_MODE)
 			rc = mdss_dsi_blank(pdata, power_state);
@@ -1889,7 +1932,8 @@ int dsi_panel_device_register(struct device_node *pan_node,
 	 * bl-gpio109 is pin 3, vled-gpio97 is pin 109.
 	 *
 	 * Requested HIGH so the display behaves from boot exactly as it does
-	 * today; only the bl pin is toggled afterwards, by bl_ctrl.
+	 * today. After that, jdn-pad panels drive them from the power on/off,
+	 * MDSS_EVENT_BLANK and bl_ctrl paths; other panels toggle only bl.
 	 */
 	ctrl_pdata->hw_vcc_gpio = of_get_named_gpio(ctrl_pdev->dev.of_node,
 		"qcom,platform-vcc-gpio2", 0);

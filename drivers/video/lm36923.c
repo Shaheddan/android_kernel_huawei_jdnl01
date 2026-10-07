@@ -62,7 +62,14 @@
  * 0x12 = 0x73) and brightness still works in that state, so these are about
  * matching the tuning the hardware is known-good with, not about function.
  */
-#define LM36923_BL_CONTROL_VAL		0x55
+/*
+ * jdn-pad: register-only (0x15), not the bootloader's 0x55. 0x55 adds
+ * BRT_MUL_RAMP (0x40): LEDs = I2C code x PWM input. After the panel's
+ * cold VCC power cycle (jdn-pad sleep) that PWM input stays at zero and
+ * the screen is dark; 0x15 keeps linear mapping, ramp on, rate 0.5 and
+ * adj high, and was verified live to light the panel at the right level.
+ */
+#define LM36923_BL_CONTROL_VAL	0x15
 #define LM36923_PWM_CONTROL_VAL		0xa3
 
 /* DT fallbacks -- jdn's node supplies all three, these are for safety only. */
@@ -186,6 +193,54 @@ out:
 	mutex_unlock(&d->lock);
 }
 EXPORT_SYMBOL(lm36923_set_backlight);
+
+/*
+ * jdn-pad: Huawei's interface. reg11 is the chip's full 11-bit brightness
+ * code (0-2047), already mapped through Huawei's jordan curve by mdss.
+ * Unlike lm36923_set_backlight(), code 0 IS written: on the pad path the
+ * chip stays powered (BL/VCC) until the panel powers off, so the LEDs are
+ * switched off by register, as Huawei's driver does.
+ */
+void lm36923_set_brightness_raw(u32 reg11)
+{
+	struct lm36923_data *d = lm36923_dev;
+	int lsb;
+
+	if (!d)
+		return;
+	if (reg11 > 2047)
+		reg11 = 2047;
+
+	mutex_lock(&d->lock);
+
+	/* Not configured since the last 0 => already dark; nothing to switch off. */
+	if (!reg11 && !d->configured)
+		goto out;
+
+	if (reg11 && !d->configured) {
+		/* VLED was raised by mdss just before this call; same precautionary
+		 * settle as lm36923_set_backlight(). */
+		usleep_range(2000, 3000);
+		if (lm36923_chip_init(d) < 0)
+			goto out;
+		d->configured = true;
+	}
+
+	/* LSB 0x18 bits [2:0] = code[2:0]; keep the register's other bits. */
+	lsb = i2c_smbus_read_byte_data(d->client, 0x18);
+	if (lsb >= 0)
+		lm36923_write(d, 0x18, (u8)((lsb & ~0x07) | (reg11 & 0x07)));
+	/* MSB 0x19 = code[10:3]. */
+	lm36923_write(d, LM36923_REG_BRT_MSB, (u8)(reg11 >> 3));
+
+	/* Re-run chip_init before the next non-zero code: the panel may be about
+	 * to power down, taking this chip's rail with it. */
+	if (!reg11)
+		d->configured = false;
+out:
+	mutex_unlock(&d->lock);
+}
+EXPORT_SYMBOL(lm36923_set_brightness_raw);
 
 /*
  * Huawei's property names, read from the same node their own driver reads.

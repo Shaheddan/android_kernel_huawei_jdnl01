@@ -273,6 +273,17 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 	ctrl_pdata = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 
+	/*
+	 * jdn-pad: Huawei's mdss_dsi_panel_reset() returns here for jdn's pad-2
+	 * panels, so stock never drives the reset line after the bootloader; the
+	 * panel is reset by its VCC power cycle instead (mdss_dsi_panel_power_off).
+	 * Pulsing reset with VCC still up is the suspected cause of the image
+	 * waking up shifted by a few rows.
+	 */
+	if (ctrl_pdata->hw_product_pad == 1 &&
+	    ctrl_pdata->which_product_pad == 2)
+		return rc;
+
 	if (!gpio_is_valid(ctrl_pdata->disp_en_gpio)) {
 		pr_debug("%s:%d, reset line not configured\n",
 			   __func__, __LINE__);
@@ -658,6 +669,28 @@ late_initcall(jdn_dsi_dbg_init);
 /* ---- end hwjdn DSI command injection ------------------------------------ */
 
 
+/*
+ * jdn-pad: Huawei's "special backlight curve for jordan lcd"
+ * (mdss_dsi_panel_bklt_dcs_pad in their JDN source): Android's 0-255 level
+ * to the LM36923's 11-bit code. Full scale is 1505, not 2047 -- Huawei's own
+ * LED current ceiling for this panel. It reproduces their stock log exactly
+ * (level 17 -> 100). Levels 1-3 never arrive: mdss clamps to bl-min-level 4.
+ */
+static u32 jdn_pad_bl_code(struct mdss_dsi_ctrl_pdata *ctrl, u32 level)
+{
+	const char *name = ctrl->panel_data.panel_info.panel_name;
+
+	if (!level)
+		return 0;
+	if (level >= 4 && level < 8) {
+		if (!strcmp(name, "INX_NT51021_8_1200P_VIDEO"))
+			return 15 + (level - 4) * 8;
+		if (!strcmp(name, "AUO_NT51021_8_1200P_VIDEO"))
+			return 12 + (level - 4) * 9;
+	}
+	return (59 * level + 5) / 10;
+}
+
 static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 							u32 bl_level)
 {
@@ -682,23 +715,27 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 		bl_level = pdata->panel_info.bl_min;
 
 	/*
-	 * The DCS brightness below is inert on this panel -- it ignores 0x51. Real
-	 * dimming is the LM36923 call further down. Gate the
-	 * hardware enable here so level 0 genuinely turns the light off, which is
-	 * what lets the power button blank the screen. Only the bl pin is
-	 * touched; see the request site in mdss_dsi.c for why.
+	 * jdn-pad: Huawei's tablet backlight path (mdss_dsi_panel_bl_ctrl and
+	 * mdss_dsi_panel_bklt_dcs_pad in their JDN source). BL and VCC belong to
+	 * the panel power on/off path; VLED is raised at the first non-zero level
+	 * after an unblank, then the level goes through Huawei's curve into the
+	 * LM36923. The DCS 0x51 sent further down is still inert on this panel.
 	 */
 	jdn_dbg_ctrl = ctrl_pdata;	/* for /sys/kernel/jdn_dsi/cmd */
-	if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
-		gpio_set_value(ctrl_pdata->hw_bl_gpio, bl_level ? 1 : 0);
-
-	/*
-	 * Real proportional dimming. The LM36923 at i2c-0 0x36 is this board's
-	 * actual backlight controller; the DCS path below is a no-op on this
-	 * panel. Called AFTER the gpio above so the chip's rail is up before we
-	 * talk to it, and compiles to nothing when the driver is disabled.
-	 */
-	lm36923_set_backlight(bl_level);
+	if (ctrl_pdata->hw_product_pad == 1 &&
+	    ctrl_pdata->which_product_pad == 2) {
+		if (bl_level && !ctrl_pdata->hw_led_en) {
+			if (gpio_is_valid(ctrl_pdata->hw_vled_gpio))
+				gpio_set_value(ctrl_pdata->hw_vled_gpio, 1);
+			ctrl_pdata->hw_led_en = true;
+		}
+		lm36923_set_brightness_raw(jdn_pad_bl_code(ctrl_pdata, bl_level));
+	} else {
+		/* Non-pad panels: the earlier behaviour, unchanged. */
+		if (gpio_is_valid(ctrl_pdata->hw_bl_gpio))
+			gpio_set_value(ctrl_pdata->hw_bl_gpio, bl_level ? 1 : 0);
+		lm36923_set_backlight(bl_level);
+	}
 
 	switch (ctrl_pdata->bklt_ctrl) {
 	case BL_WLED:
@@ -1907,6 +1944,18 @@ static int mdss_panel_parse_dt(struct device_node *np,
 
 	pinfo->mipi.lp11_init = of_property_read_bool(np,
 					"qcom,mdss-dsi-lp11-init");
+
+	/*
+	 * jdn-pad: Huawei's tablet flags (their mdss_panel_parse_dt). jdn's INX
+	 * and AUO NT51021 panels set product-pad-flag 1 / which-product-pad 2,
+	 * which selects the pad power, reset and backlight paths.
+	 */
+	rc = of_property_read_u32(np, "huawei,product-pad-flag", &tmp);
+	ctrl_pdata->hw_product_pad = (!rc ? tmp : 0);
+	rc = of_property_read_u32(np, "huawei,which-product-pad", &tmp);
+	ctrl_pdata->which_product_pad = (!rc ? tmp : 0);
+	pr_info("%s: jdn-pad flags: product-pad %d which %d\n", __func__,
+		ctrl_pdata->hw_product_pad, ctrl_pdata->which_product_pad);
 	rc = of_property_read_u32(np, "qcom,mdss-dsi-init-delay-us", &tmp);
 	pinfo->mipi.init_delay = (!rc ? tmp : 0);
 

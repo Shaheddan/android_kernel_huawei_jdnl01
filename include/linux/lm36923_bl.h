@@ -29,9 +29,17 @@
  */
 void lm36923_set_backlight(u32 bl_level);
 
+/*
+ * jdn-pad: set the chip's raw 11-bit brightness code (0-2047). Used by the
+ * pad backlight path, which maps Android's level through Huawei's curve and,
+ * unlike lm36923_set_backlight(), writes 0 to switch the LEDs off.
+ */
+void lm36923_set_brightness_raw(u32 reg11);
+
 #else /* !CONFIG_LM36923_BL */
 
 static inline void lm36923_set_backlight(u32 bl_level) { }
+static inline void lm36923_set_brightness_raw(u32 reg11) { }
 
 #endif /* CONFIG_LM36923_BL */
 

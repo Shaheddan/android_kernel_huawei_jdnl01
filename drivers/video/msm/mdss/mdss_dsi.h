@@ -348,6 +348,15 @@ struct mdss_dsi_ctrl_pdata {
 	int hw_vcc_gpio;
 	int hw_bl_gpio;
 	int hw_vled_gpio;
+	/*
+	 * jdn-pad: Huawei's tablet panel flags (huawei,product-pad-flag /
+	 * huawei,which-product-pad). jdn's NT51021 panels are product-pad 1,
+	 * which-product-pad 2. hw_led_en tracks VLED between an unblank and the
+	 * first non-zero brightness, like Huawei's hw_led_en_flag.
+	 */
+	int hw_product_pad;
+	int which_product_pad;
+	bool hw_led_en;
 	int mode_gpio;
 	int bklt_ctrl;	/* backlight ctrl */
 	bool pwm_pmi;
