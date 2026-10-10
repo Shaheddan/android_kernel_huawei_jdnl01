@@ -27,12 +27,14 @@
  *   no special case. Coordinates come out already in display pixels: captured
  *   samples span x 187..1069 and y 152..1708 against a 1200x1920 panel.
  *
- * POLLING BY DEFAULT, ON PURPOSE
- *   Polling is what was proven to work on this hardware. The DTS declares
- *   `interrupts = <0xd 0x2008>` and that trigger encoding is not something I
- *   can verify without another flash cycle, so the interrupt path is opt-in
- *   via the `use_irq` parameter. In a recovery environment a 66 Hz poll costs
- *   nothing that matters.
+ * INTERRUPT BY DEFAULT (measured 2026-10-10 on JDN-L01)
+ *   The driver started out polling every 15 ms because the DTS trigger
+ *   encoding could not be verified without a flash. Rebinding at runtime
+ *   with use_irq=1 then proved the interrupt path on gpio 13, falling
+ *   edge: 0 interrupts in 5 s idle, 235 in 10 s of swiping, and a clearly
+ *   more responsive feel - polling added up to 15 ms of latency plus
+ *   jitter and kept a timer firing with the screen off. Polling remains
+ *   as the fallback (use_irq=0, or no valid novatek,irq-gpio).
  *
  * POWER
  *   Two GPIO-controlled rails, both required -- verified live, because raising
@@ -66,7 +68,7 @@
 static int max_x = 1200;
 static int max_y = 1920;
 static int poll_ms = 15;	/* ~66 Hz */
-static bool use_irq;
+static bool use_irq = true;	/* see INTERRUPT BY DEFAULT above */
 /*
  * How long to wait after FB_BLANK_UNBLANK before trusting the controller
  * again. The phantom tap measured on this hardware arrived 249 ms after the
@@ -96,6 +98,7 @@ struct nvt_ts {
 	unsigned long slots_down;	/* bitmask of slots currently reported */
 	struct notifier_block fb_notif;
 	bool display_off;		/* set between BLANK and UNBLANK+settle */
+	bool irq_mode;			/* what probe chose; use_irq may change later */
 	u8 buf[NVT_READ_LEN];
 };
 
@@ -208,17 +211,37 @@ static int nvt_fb_notifier_cb(struct notifier_block *nb,
 
 	blank = *(int *)evdata->data;
 
-	if (blank == FB_BLANK_POWERDOWN) {
+	/* The display_off checks keep disable_irq()/enable_irq() balanced
+	 * if the same blank state is reported twice. */
+	if (blank == FB_BLANK_POWERDOWN && !ts->display_off) {
 		ts->display_off = true;
+		/*
+		 * Interrupt mode: take no interrupts at all while the display is
+		 * down - no phantom tap (see nvt_poll_work), no wakeups.
+		 * disable_irq() also waits for a running handler, so nothing
+		 * reports after the release below.
+		 */
+		if (ts->irq_mode)
+			disable_irq(ts->client->irq);
 		nvt_release_all(ts);
 		dev_dbg(&ts->client->dev, "display off, touch gated\n");
-	} else if (blank == FB_BLANK_UNBLANK) {
+	} else if (blank == FB_BLANK_UNBLANK && ts->display_off) {
 		/*
 		 * Stay gated a little past unblank: the phantom report happens
 		 * around the panel power transition, not only on the way down.
 		 */
 		msleep(resume_settle_ms);
+		/*
+		 * Interrupt mode: read once and discard before re-enabling, in
+		 * case the controller queued a report during the transition and
+		 * holds its line low until read - with a falling-edge interrupt
+		 * no new edge would then ever arrive.
+		 */
+		if (ts->irq_mode)
+			nvt_read_block(ts, 0x00, ts->buf, NVT_READ_LEN);
 		ts->display_off = false;
+		if (ts->irq_mode)
+			enable_irq(ts->client->irq);
 		dev_dbg(&ts->client->dev, "display on, touch live\n");
 	}
 
@@ -244,7 +267,16 @@ static void nvt_poll_work(struct work_struct *work)
 
 static irqreturn_t nvt_irq_thread(int irq, void *dev_id)
 {
-	nvt_report((struct nvt_ts *)dev_id);
+	struct nvt_ts *ts = dev_id;
+
+	/* An interrupt that slipped in just before disable_irq() on blank:
+	 * drain the controller, report nothing. */
+	if (ts->display_off) {
+		nvt_read_block(ts, 0x00, ts->buf, NVT_READ_LEN);
+		return IRQ_HANDLED;
+	}
+
+	nvt_report(ts);
 	return IRQ_HANDLED;
 }
 
@@ -372,6 +404,7 @@ static int nvt_ts_probe(struct i2c_client *client,
 				client->irq, ret);
 			return ret;
 		}
+		ts->irq_mode = true;
 		dev_info(&client->dev, "using irq %d\n", client->irq);
 	} else {
 		INIT_DELAYED_WORK(&ts->poll_work, nvt_poll_work);
@@ -395,7 +428,7 @@ static int nvt_ts_remove(struct i2c_client *client)
 
 	fb_unregister_client(&ts->fb_notif);
 
-	if (!use_irq)
+	if (!ts->irq_mode)
 		cancel_delayed_work_sync(&ts->poll_work);
 
 	return 0;
