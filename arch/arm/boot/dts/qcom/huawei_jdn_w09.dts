@@ -1,0 +1,65 @@
+/*
+ * huawei_jdn_w09.dts - Huawei MediaPad T2 8.0 Pro JDN-W09 (Wi-Fi only).
+ *
+ * WHY a thin layer over huawei_jdn_l01.dts: Huawei's own JDN kernel source
+ * (JDN-W09_MM_EMUI4.0_opensource) builds L01, W09 and AL00 from one shared
+ * set of dtsi files, and the W09 differs from the L01 only in what is set
+ * below. Keeping a single body means every fix (pad panel power, charger
+ * input limit, ...) lands in one place for all three variants.
+ *
+ * Without a DTB carrying the W09's board-id (8082 = 0x1f92) the bootloader
+ * finds no matching entry in dt.img - the stock-derived dt.img held only the
+ * L01's - which fits the reported "W09 does not boot" bug.
+ *
+ * Every value is taken from Huawei's huawei_jdn_w09_va.dts and
+ * huawei_msm8939_jdn_w09_va/*.dtsi.
+ */
+#include "huawei_jdn_l01.dts"
+
+/ {
+	model = "Qualcomm MSM 8939 HUAWEI JDN-W09";
+	qcom,board-id = <0x1f92 0x0 0x1f92 0x4>;
+	huawei,modem_id = <0xff0000a2 0x0>;
+
+	soc {
+		/* Huawei's W09 has no SAR sensor node: the SAR proximity
+		 * sensor only exists to cut cellular TX power. */
+		huawei_sar_info {
+			status = "disabled";
+		};
+
+		qcom,mdss_mdp@1a00000 {
+			/* W09-only panel timing: front porches 60 / 100
+			 * (L01 and AL00 use 64 / 104). */
+			qcom,mdss_dsi_inx_nt51021_8_1200p_video {
+				qcom,mdss-dsi-h-front-porch = <0x3c>;
+				qcom,mdss-dsi-v-front-porch = <0x64>;
+			};
+
+			qcom,mdss_dsi_auo_nt51021_8_1200p_video {
+				qcom,mdss-dsi-h-front-porch = <0x3c>;
+				qcom,mdss-dsi-v-front-porch = <0x64>;
+			};
+		};
+	};
+
+	/* Variant identity. init_hwjdn reads fac,product_name back through
+	 * /proc/app_info to tell the variants apart. */
+	qcom,hw-camera-board-id {
+		qcom,product-name = "msm8939_JDN-W09";
+	};
+
+	huawei_sensor_info {
+		product_name = "msm8939_JDN-W09";
+	};
+
+	huawei_wifi_info {
+		wifi,pubfile_id = "jdn_w09_va";
+	};
+
+	huawei_fac_info {
+		fac,product_name = "HUAWEI JDN-W09";
+		fac,hardware_ver = "SH1JDNW09LM";
+		fac,software_ver = "MSM8939_JDN_W09_VA";
+	};
+};

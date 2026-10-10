@@ -1,0 +1,50 @@
+/*
+ * huawei_jdn_al00.dts - Huawei MediaPad T2 8.0 Pro JDN-AL00 (China, LTE).
+ *
+ * WHY a thin layer over huawei_jdn_l01.dts: Huawei's own JDN kernel source
+ * (JDN-W09_MM_EMUI4.0_opensource) builds L01, W09 and AL00 from one shared
+ * set of dtsi files, and the AL00 differs from the L01 only in what is set
+ * below (its other dtsi differences are comments and whitespace; its three
+ * extra battery-profile files are not included by anything). Keeping a
+ * single body means every fix lands in one place for all three variants.
+ *
+ * Without a DTB carrying the AL00's board-id (8130 = 0x1fc2) the bootloader
+ * finds no matching entry in dt.img.
+ *
+ * Every value is taken from Huawei's huawei_jdn_al00_va.dts and
+ * huawei_msm8939_jdn_al00_va/*.dtsi.
+ */
+#include "huawei_jdn_l01.dts"
+
+/ {
+	model = "Qualcomm MSM 8939 HUAWEI JDN-AL00";
+	qcom,board-id = <0x1fc2 0x0 0x1fc2 0x4>;
+	huawei,modem_id = <0xfff800a0 0x0>;
+
+	soc {
+		/* Huawei's AL00 dts has no SAR sensor node either. */
+		huawei_sar_info {
+			status = "disabled";
+		};
+	};
+
+	/* Variant identity. init_hwjdn reads fac,product_name back through
+	 * /proc/app_info to tell the variants apart. */
+	qcom,hw-camera-board-id {
+		qcom,product-name = "msm8939_JDN-AL00";
+	};
+
+	huawei_sensor_info {
+		product_name = "msm8939_JDN-AL00";
+	};
+
+	huawei_wifi_info {
+		wifi,pubfile_id = "jdn_al00_va";
+	};
+
+	huawei_fac_info {
+		fac,product_name = "HUAWEI JDN-AL00";
+		fac,hardware_ver = "SH1JDNAL00LM";
+		fac,software_ver = "MSM8939_JDN_AL00_VA";
+	};
+};
