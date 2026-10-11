@@ -17,6 +17,8 @@
 #include "msm_sd.h"
 #include "msm_cci.h"
 #include "msm_eeprom.h"
+/* jdn: HI843 O-Film pad OTP register tables (Huawei) */
+#include "msm_hi843_ofilm_pad_eeprom.h"
 
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
@@ -266,6 +268,112 @@ static const struct v4l2_subdev_internal_ops msm_eeprom_internal_ops = {
 	.open = msm_eeprom_open,
 	.close = msm_eeprom_close,
 };
+/*
+ * jdn: OTP reader for the HI843 O-Film "pad" camera module, ported from
+ * Huawei's JDN kernel source (msm_eeprom.c, DTS2016062703783).
+ *
+ * WHY: the HI843 keeps its module calibration (module info, white balance,
+ * lens shading, AF) in on-chip OTP memory, not in a separate EEPROM. The
+ * generic memory-map read below (one i2c_read_seq of mem.valid_size bytes at
+ * 0x0201) only returns live sensor registers, so on JDN-L01 the stock camera
+ * HAL's hi843_ofilm_pad EEPROM library logged "invalid or empty otp data" and
+ * "invalid or empty wb data" and ran without the module's white-balance
+ * calibration. The OTP has to be read the Hynix way: load the sensor's init
+ * code, switch to OTP mode, then per byte write the address to
+ * 0x070a/0x070b, set read mode at 0x0702 and read 0x0708.
+ *
+ * The bytes handed to userspace keep Huawei's layout exactly, because the
+ * stock HAL parses that layout: 0x0201..0x0234 (module info), then
+ * continuing from 0x0c5f (AWB and the rest) until mem.valid_size bytes.
+ *
+ * Differences from Huawei's version, none of which change the data read:
+ * addr_type is set explicitly instead of through a stray "rc |= ..." in the
+ * loop, the read loop stops at the first failed transfer, and the 10 ms
+ * delay that otp_to_norm_mode_array declares after sleep-on is honoured.
+ */
+static int msm_hi843_otp_read(struct msm_eeprom_ctrl_t *e_ctrl,
+			      struct msm_eeprom_memory_map_t *emap,
+			      uint8_t *memptr)
+{
+	struct msm_camera_i2c_client *client = &e_ctrl->i2c_client;
+	uint32_t addr;
+	uint32_t i;
+	int rc;
+
+	/* Every HI843 register address is 16-bit. */
+	client->addr_type = MSM_CAMERA_I2C_WORD_ADDR;
+
+	/* Load the sensor's init code (16-bit data). */
+	for (i = 0; i < ARRAY_SIZE(init_regotp_array); i++) {
+		rc = client->i2c_func_tbl->i2c_write(client,
+			init_regotp_array[i].reg_addr,
+			init_regotp_array[i].reg_data,
+			MSM_CAMERA_I2C_WORD_DATA);
+		if (rc < 0) {
+			pr_err("%s: init write %u failed: %d\n",
+				__func__, i, rc);
+			return rc;
+		}
+	}
+
+	/* Switch to OTP read mode (8-bit data, with the table's delays). */
+	for (i = 0; i < ARRAY_SIZE(init_otp_array); i++) {
+		rc = client->i2c_func_tbl->i2c_write(client,
+			init_otp_array[i].reg_addr,
+			init_otp_array[i].reg_data,
+			MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc < 0) {
+			pr_err("%s: otp mode write %u failed: %d\n",
+				__func__, i, rc);
+			return rc;
+		}
+		if (init_otp_array[i].delay)
+			mdelay(init_otp_array[i].delay);
+	}
+
+	addr = emap->mem.addr;
+	for (i = 0; i < emap->mem.valid_size; i++) {
+		rc = client->i2c_func_tbl->i2c_write(client, 0x070a,
+			(addr >> 8) & 0xff, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc >= 0)
+			rc = client->i2c_func_tbl->i2c_write(client, 0x070b,
+				addr & 0xff, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc >= 0)
+			rc = client->i2c_func_tbl->i2c_write(client, 0x0702,
+				0x01, MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc >= 0)
+			rc = client->i2c_func_tbl->i2c_read_seq(client,
+				0x0708, memptr + i, 1);
+		if (rc < 0) {
+			pr_err("%s: otp read at 0x%04x failed: %d\n",
+				__func__, addr, rc);
+			return rc;
+		}
+		/* Module info ends at 0x0234; AWB data follows from 0x0c5f. */
+		if (addr == 0x0234)
+			addr = 0x0c5e;
+		addr++;
+	}
+
+	/* Back to normal mode. */
+	for (i = 0; i < ARRAY_SIZE(otp_to_norm_mode_array); i++) {
+		rc = client->i2c_func_tbl->i2c_write(client,
+			otp_to_norm_mode_array[i].reg_addr,
+			otp_to_norm_mode_array[i].reg_data,
+			MSM_CAMERA_I2C_BYTE_DATA);
+		if (rc < 0) {
+			pr_err("%s: normal mode write %u failed: %d\n",
+				__func__, i, rc);
+			return rc;
+		}
+		if (otp_to_norm_mode_array[i].delay)
+			mdelay(otp_to_norm_mode_array[i].delay);
+	}
+
+	pr_info("%s: read %u OTP bytes\n", __func__, emap->mem.valid_size);
+	return 0;
+}
+
 /**
   * read_eeprom_memory() - read map data into buffer
   * @e_ctrl:	eeprom control struct
@@ -334,13 +442,30 @@ static int read_eeprom_memory(struct msm_eeprom_ctrl_t *e_ctrl,
 		}
 
 		if (emap[j].mem.valid_size) {
-			e_ctrl->i2c_client.addr_type = emap[j].mem.addr_t;
-			rc = e_ctrl->i2c_client.i2c_func_tbl->i2c_read_seq(
-				&(e_ctrl->i2c_client), emap[j].mem.addr,
-				memptr, emap[j].mem.valid_size);
-			if (rc < 0) {
-				pr_err("%s: read failed\n", __func__);
-				return rc;
+			if (!strcmp(eb_info->eeprom_name, "hi843_ofilm_pad")) {
+				/*
+				 * jdn: this module's calibration lives in sensor
+				 * OTP, see msm_hi843_otp_read(). If that read fails,
+				 * hand userspace zeros (its library reports "no
+				 * calibration") rather than failing the probe and
+				 * losing the eeprom subdev.
+				 */
+				rc = msm_hi843_otp_read(e_ctrl, &emap[j], memptr);
+				if (rc < 0) {
+					pr_err("%s: hi843 otp read failed %d, calibration left empty\n",
+						__func__, rc);
+					memset(memptr, 0, emap[j].mem.valid_size);
+					rc = 0;
+				}
+			} else {
+				e_ctrl->i2c_client.addr_type = emap[j].mem.addr_t;
+				rc = e_ctrl->i2c_client.i2c_func_tbl->i2c_read_seq(
+					&(e_ctrl->i2c_client), emap[j].mem.addr,
+					memptr, emap[j].mem.valid_size);
+				if (rc < 0) {
+					pr_err("%s: read failed\n", __func__);
+					return rc;
+				}
 			}
 			memptr += emap[j].mem.valid_size;
 		}
